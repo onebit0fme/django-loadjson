@@ -4,19 +4,51 @@ import json
 from collections import defaultdict
 from datetime import datetime
 from django.apps import apps
-from django.db.utils import IntegrityError
+from django.conf import settings
+from .finders import DefaultDataFinder
+
+class LoadNotConfigured(Exception):
+    pass
 
 
 class TransferValidationError(Exception):
     pass
 
 
-class TransferData(object):
-    defaults = {
+def get_settings():
+    loadjson_settings = getattr(settings, 'LOAD_JSON', None)
+    if loadjson_settings is None or not isinstance(loadjson_settings, dict):
+        raise LoadNotConfigured("\"LOAD_JSON\" is not defined in project settings")
+
+
+def find_data(data_name):
+    loadjson_settings = get_settings()
+    data_dirs = loadjson_settings.get('DATA_DIRS', [])
+    default_finder = DefaultDataFinder(data_dirs)
+    data = default_finder.find(data_name)
+    data_manifest = default_finder.find_manifest(data_name)
+    return data, data_manifest
+
+
+class BaseLoader(object):
+    manifest_defaults = {
         'lookup_allow_null': False,
         'rk_lookup': 'pk',
         'update': True
     }
+
+    def __init__(self, data_name, **kwargs):
+        # Load settings
+        load_settings = get_settings()
+        defaults = load_settings.get('MANIFEST_DEFAULTS', {})
+        if defaults and isinstance(defaults, dict):
+            self.manifest_defaults.update(defaults)
+
+        # Load data
+        self.data, self.manifest = find_data(data_name)
+
+
+class TransferData(BaseLoader):
     object_defaults = []
 
     def _fill_defaults(self, data):
@@ -26,17 +58,7 @@ class TransferData(object):
         return data
 
     def __init__(self, data_path):
-        if not os.path.isfile(data_path):
-            raise ValueError("{} file does not exist".format(data_path))
-        d_file, d_ext = os.path.splitext(data_path)
-        manifest_path = "{path}.manifest{ext}".format(path=d_file, ext=d_ext)
-        if not os.path.isfile(manifest_path):
-            raise ValueError("{} file does not exist".format(manifest_path))
-        self.data_path = data_path
-        with open(data_path) as data:
-            self.data = json.load(data)
-        with open(manifest_path) as manifest:
-            self.manifest = json.load(manifest)
+        super(TransferData, self).__init__()
 
         self.model = self._get_model(self.get_manifest_value('model'))
         self.object_defaults = DEFAULTS.get(self.get_manifest_value('model'))
@@ -46,7 +68,7 @@ class TransferData(object):
         self.__indices = {}
 
     def get_manifest_value(self, field, default=None):
-        return self.manifest.get(field, default or self.defaults.get(field))
+        return self.manifest.get(field, default or self.manifest_defaults.get(field))
 
     def get_dependency(self, file_name):
         if self.__dependencies.get(file_name) is not None:
@@ -139,8 +161,8 @@ class TransferData(object):
         elif field_type == 'datetime':
             field_format = field_parser.get('format', '%Y-%m-%dT%H:%M:%S.%f%z')
             dt = datetime.strptime(value, field_format)
-            if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
-                dt = pytz.utc.localize(dt)
+            # if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+            #     dt = pytz.utc.localize(dt)
             return dt
         elif field_type == 'relative_key':
             dependency = self.get_dependency(field_parser.get('file'))
