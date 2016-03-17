@@ -1,10 +1,11 @@
 import os
 import sys
-import json
+import importlib
 from collections import defaultdict
 from datetime import datetime
 from django.apps import apps
 from django.conf import settings
+from django.db.utils import IntegrityError
 from .finders import DefaultDataFinder
 
 class LoadNotConfigured(Exception):
@@ -19,6 +20,7 @@ def get_settings():
     loadjson_settings = getattr(settings, 'LOAD_JSON', None)
     if loadjson_settings is None or not isinstance(loadjson_settings, dict):
         raise LoadNotConfigured("\"LOAD_JSON\" is not defined in project settings")
+    return loadjson_settings
 
 
 def find_data(data_name):
@@ -28,6 +30,24 @@ def find_data(data_name):
     data = default_finder.find(data_name)
     data_manifest = default_finder.find_manifest(data_name)
     return data, data_manifest
+
+def import_from_string(class_path):
+    parts = class_path.split('.')
+    module_path, class_name = '.'.join(parts[:-1]), parts[-1]
+    module = importlib.import_module(module_path)
+    return getattr(module, class_name)
+
+def get_adaptor_classes():
+    loadjson_settings = get_settings()
+    adaptor_classes_settings = loadjson_settings.get('ADAPTOR_CLASSES', [])
+    adaptor_classes = []
+    for class_string in adaptor_classes_settings:
+        try:
+            adaptor_classes.append(import_from_string(class_string))
+        except ImportError:
+            raise ImportError("Unable to import {}".format(class_string))
+    return adaptor_classes
+
 
 
 class BaseLoader(object):
@@ -46,39 +66,49 @@ class BaseLoader(object):
 
         # Load data
         self.data, self.manifest = find_data(data_name)
+        if self.data is None:
+            raise LoadNotConfigured("Can't find data for {}".format(data_name))
+        if self.manifest is None:
+            raise LoadNotConfigured("Can't find manifest for {}".format(data_name))
+
+    def get_manifest_value(self, field, default=None):
+        return self.manifest.get(field, default if default is not None else self.manifest_defaults.get(field))
 
 
 class TransferData(BaseLoader):
-    object_defaults = []
+    adaptors = []
 
-    def _fill_defaults(self, data):
-        if self.object_defaults is None:
+    def _apply_adaptors(self, data):
+        if self.adaptors is None:
             return data
-        data = self.object_defaults(data, transfer_instance=self)
+        for adaptor in self.adaptors:
+            if self.app_model in adaptor.models:
+                data = adaptor.adapt(data)
+        # data = self.adaptors(data, transfer_instance=self)
         return data
 
-    def __init__(self, data_path):
-        super(TransferData, self).__init__()
+    def _post_save(self, obj, data, m2m_data):
+        if self.adaptors is not None:
+            for adaptor in self.adaptors:
+                adaptor.adapt_post_save(obj, data, m2m_data)
+        # self.adaptors.post_save(obj, data, m2m_data)
+        return obj
 
+    def __init__(self, data_name):
+        super(TransferData, self).__init__(data_name)
+
+        self.app_model = self.get_manifest_value('model')
         self.model = self._get_model(self.get_manifest_value('model'))
-        self.object_defaults = DEFAULTS.get(self.get_manifest_value('model'))
+        self.adaptors = get_adaptor_classes()
         if self.model is None:
             raise ValueError("manifest does not define 'model'")
         self.__dependencies = {}
         self.__indices = {}
 
-    def get_manifest_value(self, field, default=None):
-        return self.manifest.get(field, default or self.manifest_defaults.get(field))
-
     def get_dependency(self, file_name):
         if self.__dependencies.get(file_name) is not None:
             return self.__dependencies[file_name]
-        current = os.path.split(self.data_path)[0]
-        dep_path = os.path.join(current, file_name)
-        if not os.path.isfile(dep_path):
-            raise ValueError("{} file is specified as dependency, but file {} does not exist".format(file_name,
-                                                                                                     dep_path))
-        td = TransferData(dep_path)
+        td = TransferData(file_name)
         # cache dependency
         self.__dependencies[file_name] = td
         return td
@@ -209,7 +239,8 @@ class TransferData(BaseLoader):
         return lf
 
     def _m2m(self, data):
-        m2m_fields = M2M.get(self.get_manifest_value('model'), [])
+        # m2m_fields = M2M.get(self.get_manifest_value('model'), [])
+        m2m_fields = self.get_manifest_value('m2m_fields', default=[])
         m2m_data = {}
         for f in m2m_fields:
             m2m_data[f] = data.pop(f, None)
@@ -222,20 +253,16 @@ class TransferData(BaseLoader):
                 continue
             m2m_field = getattr(obj, field)
             if type(m2m_field).__name__ == 'RelatedManager':
-                # Some m2m fields are custom and should be handled at post_save
+                # Some m2m fields are custom and should be handled at post_save adaptor
                 continue
             if m2m_clear:
                 m2m_field.clear()
             m2m_field.add(*m2m_array)
         return obj
 
-    def _post_save(self, obj, data, m2m_data):
-        self.object_defaults.post_save(obj, data, m2m_data)
-        return obj
-
     def _update_or_create(self, model, lookup_kwargs, data, m2m_clear=True):
         # TODO: make m2m_clear configurable in manifest
-        data = self._fill_defaults(data)
+        data = self._apply_adaptors(data)
         data, m2m_data = self._m2m(data)
         obj, _ = model.objects.update_or_create(defaults=data, **lookup_kwargs)
         obj = self._m2m_fill(obj, m2m_data)
@@ -243,7 +270,7 @@ class TransferData(BaseLoader):
         return obj, _
 
     def _create(self, model, data, m2m_clear=False):
-        data = self._fill_defaults(data)
+        data = self._apply_adaptors(data)
         data, m2m_data = self._m2m(data)
         obj = model.objects.create(**data)
         obj = self._m2m_fill(obj, m2m_data)
@@ -254,7 +281,7 @@ class TransferData(BaseLoader):
         return self.model.objects.get(**lookup_kwargs)
 
     def _get_or_create(self, model, lookup_kwargs, data):
-        data = self._fill_defaults(data)
+        data = self._apply_adaptors(data)
         return model.objects.get_or_create(defaults=data, **lookup_kwargs)
 
     def _get_or_none(self, *args, **kwargs):
@@ -284,6 +311,7 @@ class TransferData(BaseLoader):
             raise ValueError("Data must be a list, got {} instead.".format(type(self.data)))
         self.valid(silent=False)
         data_model = self._get_model(self.get_manifest_value('model'))
+        skip_integrity_errors = self.get_manifest_value('skip_integrity_errors', False)
         created = 0
         updated = 0
         exceptions = defaultdict(list)
@@ -305,7 +333,10 @@ class TransferData(BaseLoader):
                     obj = self._create(data_model, to_internal)
                     created += 1
             except IntegrityError as e:
-                exceptions['IntegrityError'].append(e)
+                if skip_integrity_errors:
+                    exceptions['IntegrityError'].append(e)
+                else:
+                    raise e
 
         # REPORT
         if exceptions:
