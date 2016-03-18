@@ -1,20 +1,5 @@
 from django.core.management.base import BaseCommand
-from ...adaptors import DataDefaults
 from ...loaders import TransferData
-
-DEFAULTS = {
-    "question.Question": DataDefaults('created_by', from_obj='stack'),
-    "question.QuestionAnswer": DataDefaults('created_by', 'answer_status',
-                                            from_obj='question'),
-    "class.RoleUser": DataDefaults('class_role'),
-    "say.Say": DataDefaults('content', post_save_methods=['say_vote']),
-    "accounts.User": DataDefaults('legacy')
-}
-
-M2M = {
-    "class.Class": ["stacks"],
-    "say.Say": ["votes"]
-}
 
 
 class Command(BaseCommand):
@@ -29,6 +14,21 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         data_path = options['json_path']
         td = TransferData(data_path)
-        td.import_data()
+        td.import_data(write_to_std_out=True)
+
+        # REPORT
+        if td.report.exceptions:
+            self.stdout.write("EXCEPTIONS")
+        for exc_type, exc_list in td.report.exceptions.iteritems():
+            self.stdout.write(exc_type + "<" * 30)
+            if len(exc_list) > 10:
+                print("    - {} ERRORS".format(len(exc_list)))
+            else:
+                for message in exc_list:
+                    print("    - {}".format(message))
+            print "^" * 40
+
+        self.stdout.write("CREATED - {}".format(td.report.created))
+        self.stdout.write("UPDATED - {}".format(td.report.updated))
 
         self.stdout.write("Done!")

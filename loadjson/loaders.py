@@ -1,12 +1,12 @@
-import os
 import sys
 import importlib
+import dateutil.parser
 from collections import defaultdict
-from datetime import datetime
-from django.apps import apps
 from django.conf import settings
 from django.db.utils import IntegrityError
+from .compat import get_model
 from .finders import DefaultDataFinder
+
 
 class LoadNotConfigured(Exception):
     pass
@@ -26,9 +26,23 @@ def get_settings():
 def find_data(data_name):
     loadjson_settings = get_settings()
     data_dirs = loadjson_settings.get('DATA_DIRS', [])
-    default_finder = DefaultDataFinder(data_dirs)
-    data = default_finder.find(data_name)
-    data_manifest = default_finder.find_manifest(data_name)
+    finder_classes = loadjson_settings.get('FINDER_CLASSES')
+    finders = [DefaultDataFinder(data_dirs)]
+    if isinstance(finder_classes, list):
+        for class_string in finder_classes:
+            try:
+                finder_class = import_from_string(class_string)
+                finders.append(finder_class())
+            except ImportError:
+                raise ImportError("Unable to import {}".format(class_string))
+    data = None
+    data_manifest = None
+    for finder in finders:
+        if data is None:
+            data = finder.find(data_name)
+        if data_manifest is None:
+            data_manifest = finder.find_manifest(data_name)
+
     return data, data_manifest
 
 def import_from_string(class_path):
@@ -74,42 +88,74 @@ class BaseLoader(object):
     def get_manifest_value(self, field, default=None):
         return self.manifest.get(field, default if default is not None else self.manifest_defaults.get(field))
 
+    def _field_is_nullable(self, field):
+        nullable = self.manifest.get('nullable', [])
+        return field in nullable
+
+    def _validate(self):
+        assert isinstance(self.data, list), "Data must be a list, got {} instead.".format(type(self.data))
+
+    def valid(self, silent=True):
+        try:
+            self._validate()
+        except AssertionError as e:
+            if not silent:
+                raise e
+            return False
+        return True
+
 
 class TransferData(BaseLoader):
-    adaptors = []
+    adaptors = None
 
     def _apply_adaptors(self, data):
         if self.adaptors is None:
             return data
         for adaptor in self.adaptors:
-            if self.app_model in adaptor.models:
+            if adaptor.models is None or self.app_model in adaptor.models:
                 data = adaptor.adapt(data)
-        # data = self.adaptors(data, transfer_instance=self)
         return data
 
     def _post_save(self, obj, data, m2m_data):
         if self.adaptors is not None:
             for adaptor in self.adaptors:
                 adaptor.adapt_post_save(obj, data, m2m_data)
-        # self.adaptors.post_save(obj, data, m2m_data)
         return obj
 
     def __init__(self, data_name):
         super(TransferData, self).__init__(data_name)
 
+        # Initialize manifest
         self.app_model = self.get_manifest_value('model')
         self.model = self._get_model(self.get_manifest_value('model'))
-        self.adaptors = get_adaptor_classes()
+        adaptor_classes = get_adaptor_classes()
+        if isinstance(adaptor_classes, list):
+            self.adaptors = [adaptor(self.model, self.app_model, self.manifest) for adaptor in adaptor_classes]
         if self.model is None:
             raise ValueError("manifest does not define 'model'")
         self.__dependencies = {}
         self.__indices = {}
 
+        # Import status
+        self.report = type('Report', (object,),
+                           dict(created=0, updated=0, exceptions=defaultdict(list),
+                                count=len(self.data), item=0))()
+
+    def write_std_out(self):
+        message = "\r{item}/{count} (Created: {created}, Updated: {updated}".format(
+            count=self.report.count,
+            item=self.report.item,
+            created=self.report.created,
+            updated=self.report.updated
+        )
+        sys.stdout.write(message)
+        sys.stdout.flush()
+
     def get_dependency(self, file_name):
         if self.__dependencies.get(file_name) is not None:
             return self.__dependencies[file_name]
         td = TransferData(file_name)
-        # cache dependency
+        # cache dependency for later use
         self.__dependencies[file_name] = td
         return td
 
@@ -168,12 +214,8 @@ class TransferData(BaseLoader):
     def _get_model(self, label):
         assert label is not None, "manifest must define 'model'"
         app_label, app_model = label.split('.')
-        model = apps.get_model(app_label, app_model)
+        model = get_model(app_label, app_model)
         return model
-
-    def _field_is_nullable(self, field):
-        nullable = self.manifest.get('nullable', [])
-        return field in nullable
 
     def _to_internal_type(self, field, value):
         parsers = self.manifest.get('parsers', {})
@@ -189,8 +231,10 @@ class TransferData(BaseLoader):
             invert = field_parser.get('invert', False)
             return not value if invert else value
         elif field_type == 'datetime':
-            field_format = field_parser.get('format', '%Y-%m-%dT%H:%M:%S.%f%z')
-            dt = datetime.strptime(value, field_format)
+            # field_format = field_parser.get('format', '%Y-%m-%dT%H:%M:%S.%f%z')
+            # dt = datetime.strptime(value, field_format)
+            # Must make datetime timezone-aware
+            dt = dateutil.parser.parse(value)
             # if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
             #     dt = pytz.utc.localize(dt)
             return dt
@@ -204,16 +248,13 @@ class TransferData(BaseLoader):
         raise ValueError("'{}' field type is not supported".format(field_type))
 
     def _to_internal(self, item):
-        internal = self.manifest.get('mapping')
+        internal = self.get_manifest_value('mapping')
         assert internal is not None, "manifest must define 'mapping'"
         final_internal = {}
         for field in internal.keys():
             mapping_path = internal[field].split('.')
             raw_value = item
             for p in mapping_path:
-                if isinstance(raw_value, list):
-                    print mapping_path
-                    print raw_value
                 raw_value = raw_value.get(p)
             if not self._field_is_nullable(field):
                 assert raw_value is not None, "Invalid mapping '{}'".format(internal[field])
@@ -265,7 +306,7 @@ class TransferData(BaseLoader):
         data = self._apply_adaptors(data)
         data, m2m_data = self._m2m(data)
         obj, _ = model.objects.update_or_create(defaults=data, **lookup_kwargs)
-        obj = self._m2m_fill(obj, m2m_data)
+        obj = self._m2m_fill(obj, m2m_data, m2m_clear=m2m_clear)
         obj = self._post_save(obj, data, m2m_data)
         return obj, _
 
@@ -290,65 +331,31 @@ class TransferData(BaseLoader):
         except self.model.DoesNotExist:
             return None
 
-    def _validate(self):
-        pass
-
-    def write(self, message):
-        sys.stdout.write(message)
-        sys.stdout.flush()
-
-    def valid(self, silent=True):
-        try:
-            self._validate()
-        except AssertionError as e:
-            if not silent:
-                raise e
-            return False
-        return True
-
-    def import_data(self):
-        if not isinstance(self.data, list):
-            raise ValueError("Data must be a list, got {} instead.".format(type(self.data)))
+    def import_data(self, write_to_std_out=False):
         self.valid(silent=False)
-        data_model = self._get_model(self.get_manifest_value('model'))
         skip_integrity_errors = self.get_manifest_value('skip_integrity_errors', False)
-        created = 0
-        updated = 0
-        exceptions = defaultdict(list)
         for item in self.data:
+            self.report.item += 1
             to_internal = self._to_internal(item)
 
             lookup_kwargs = self._lookup_by(to_internal)
             try:
                 if lookup_kwargs is not None:
                     if self.get_manifest_value('update'):
-                        obj, _created = self._update_or_create(data_model, lookup_kwargs, to_internal)
+                        obj, _created = self._update_or_create(self.model, lookup_kwargs, to_internal)
                     else:
-                        obj, _created = self._get_or_create(data_model, lookup_kwargs, to_internal)
+                        obj, _created = self._get_or_create(self.model, lookup_kwargs, to_internal)
                     if _created:
-                        created += 1
+                        self.report.created += 1
                     elif self.get_manifest_value('update'):
-                        updated += 1
+                        self.report.updated += 1
                 else:
-                    obj = self._create(data_model, to_internal)
-                    created += 1
+                    self._create(self.model, to_internal)
+                    self.report.created += 1
             except IntegrityError as e:
                 if skip_integrity_errors:
-                    exceptions['IntegrityError'].append(e)
+                    self.report.exceptions['IntegrityError'].append(e)
                 else:
                     raise e
-
-        # REPORT
-        if exceptions:
-            print("EXCEPTIONS")
-        for exc_type, exc_list in exceptions.iteritems():
-            print(exc_type + "<" * 30)
-            if len(exc_list) > 10 and False:
-                print("    - {} ERRORS".format(len(exc_list)))
-            else:
-                for message in exc_list:
-                    print("    - {}".format(message))
-            print "^" * 40
-
-        print("CREATED - {}".format(created))
-        print("UPDATED - {}".format(updated))
+            if write_to_std_out:
+                self.write_std_out()
