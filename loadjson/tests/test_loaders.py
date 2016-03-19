@@ -13,5 +13,5 @@ class LoadersTest(TestCase):
 
     def test_loader_no_data(self):
         with self.assertRaises(LoadNotConfigured) as err:
-            loader = TransferData(data_name='test_data')
-        self.assertTrue("Can't find data" in err.exception.message)
+            TransferData(data_name='test_data')
+        self.assertTrue("Can't find data" in str(err.exception))

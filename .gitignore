@@ -1,2 +1,7 @@
 .idea
 .tox
+.coverage
+.cache
+*.egg
+*.egg-info
+*.sqlite

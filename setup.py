@@ -10,7 +10,7 @@ setup(
     description="Loadjson management command for Django",
     long_description=LONG_DESCRIPTION,
     classifiers=[
-        "Development Status :: 2 - Pre-Alpha",
+        "Development Status :: 3 - Alpha",
         "Environment :: Console",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",

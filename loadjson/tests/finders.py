@@ -3,6 +3,7 @@ TEST_DATA = {}
 
 TEST_MANIFEST = {}
 
+
 class TestDataFinder(object):
     """
     Data finder for tests.

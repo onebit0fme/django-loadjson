@@ -46,11 +46,13 @@ def find_data(data_name):
 
     return data, data_manifest
 
+
 def import_from_string(class_path):
     parts = class_path.split('.')
     module_path, class_name = '.'.join(parts[:-1]), parts[-1]
     module = importlib.import_module(module_path)
     return getattr(module, class_name)
+
 
 def get_adaptor_classes():
     loadjson_settings = get_settings()
@@ -62,6 +64,7 @@ def get_adaptor_classes():
         except ImportError:
             raise ImportError("Unable to import {}".format(class_string))
     return adaptor_classes
+
 
 def get_model_handler_class():
     loadjson_settings = get_settings()
