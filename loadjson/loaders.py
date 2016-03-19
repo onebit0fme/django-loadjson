@@ -78,7 +78,7 @@ class BaseLoader(object):
         'update': True
     }
 
-    def __init__(self, data_name, **kwargs):
+    def __init__(self, *args, **kwargs):
         # Load settings
         load_settings = get_settings()
         defaults = load_settings.get('MANIFEST_DEFAULTS', {})
@@ -86,11 +86,15 @@ class BaseLoader(object):
             self.manifest_defaults.update(defaults)
 
         # Load data
-        self.data, self.manifest = find_data(data_name)
+        data_name = kwargs.get('data_name')
+        self.data = kwargs.get('data')
+        self.manifest = kwargs.get('manifest')
+        if self.data is None or self.manifest is None:
+            self.data, self.manifest = find_data(data_name)
         if self.data is None:
-            raise LoadNotConfigured("Can't find data for {}".format(data_name))
+            raise LoadNotConfigured("Can't find data for {}".format(data_name or ''))
         if self.manifest is None:
-            raise LoadNotConfigured("Can't find manifest for {}".format(data_name))
+            raise LoadNotConfigured("Can't find manifest for {}".format(data_name or ''))
 
     def get_manifest_value(self, field, default=None):
         return self.manifest.get(field, default if default is not None else self.manifest_defaults.get(field))
@@ -129,8 +133,8 @@ class TransferData(BaseLoader):
                 adaptor.adapt_post_save(obj, data, m2m_data)
         return obj
 
-    def __init__(self, data_name):
-        super(TransferData, self).__init__(data_name)
+    def __init__(self, *args, **kwargs):
+        super(TransferData, self).__init__(*args, **kwargs)
 
         # Initialize manifest
         self.app_model = self.get_manifest_value('model')
@@ -162,7 +166,7 @@ class TransferData(BaseLoader):
     def get_dependency(self, file_name):
         if self.__dependencies.get(file_name) is not None:
             return self.__dependencies[file_name]
-        td = TransferData(file_name)
+        td = TransferData(data_name=file_name)
         # cache dependency for later use
         self.__dependencies[file_name] = td
         return td
@@ -239,12 +243,7 @@ class TransferData(BaseLoader):
             invert = field_parser.get('invert', False)
             return not value if invert else value
         elif field_type == 'datetime':
-            # field_format = field_parser.get('format', '%Y-%m-%dT%H:%M:%S.%f%z')
-            # dt = datetime.strptime(value, field_format)
-            # Must make datetime timezone-aware
             dt = dateutil.parser.parse(value)
-            # if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
-            #     dt = pytz.utc.localize(dt)
             return dt
         elif field_type == 'relative_key':
             dependency = self.get_dependency(field_parser.get('data_name'))
@@ -253,13 +252,29 @@ class TransferData(BaseLoader):
                                            many=field_parser.get('many', False),
                                            lookup=field_parser.get('lookup'))
             return fk_obj
+        elif field_type == 'relative_object':
+            data_name = field_parser.get('data_name')
+            manifest = field_parser.get('manifest')
+            return self._handle_relative_objects(value, data_name=data_name,
+                                                 manifest=manifest, many=field_parser.get('many', False))
+
         raise ValueError("'{}' field type is not supported".format(field_type))
+
+    def _handle_relative_objects(self, data, data_name=None, manifest=None, many=False):
+        dt = TransferData(data=data, manifest=manifest, data_name=data_name)
+        if many:
+            return dt.import_data(write_to_std_out=False)
+        else:
+            return dt.import_item(data, dt.get_manifest_value('update', True),
+                                  dt.get_manifest_value('skip_integrity_errors', False))[0]
 
     def _to_internal(self, item):
         internal = self.get_manifest_value('mapping')
         assert internal is not None, "manifest must define 'mapping'"
         final_internal = {}
         for field in internal.keys():
+            if not isinstance(field, six.string_types):
+                raise TransferValidationError("\"mapping\" improperly configured")
             mapping_path = internal[field].split('.')
             raw_value = item
             for p in mapping_path:
@@ -344,31 +359,42 @@ class TransferData(BaseLoader):
         except self.model.DoesNotExist:
             return None
 
+    def import_item(self, item, update=False, skip_integrity_errors=False):
+        to_internal = self._to_internal(item)
+
+        lookup_kwargs = self._lookup_by(to_internal)
+        try:
+            if lookup_kwargs is not None:
+                if update:
+                    obj, _created = self._update_or_create(lookup_kwargs, to_internal)
+                else:
+                    obj, _created = self._get_or_create(lookup_kwargs, to_internal)
+                return obj, _created
+            else:
+                obj = self._create(self.model, to_internal)
+                return obj, True
+        except IntegrityError as e:
+            if skip_integrity_errors:
+                self.report.exceptions['IntegrityError'].append(e)
+            else:
+                raise e
+            return None, None
+
     def import_data(self, write_to_std_out=False):
         self.valid(silent=False)
         skip_integrity_errors = self.get_manifest_value('skip_integrity_errors', False)
+        objs = []
         for item in self.data:
             self.report.item += 1
-            to_internal = self._to_internal(item)
+            obj, _created = self.import_item(item,
+                                             update=self.get_manifest_value('update', default=True),
+                                             skip_integrity_errors=skip_integrity_errors)
+            objs.append(obj)
+            if _created:
+                self.report.created += 1
+            elif self.get_manifest_value('update'):
+                self.report.updated += 1
 
-            lookup_kwargs = self._lookup_by(to_internal)
-            try:
-                if lookup_kwargs is not None:
-                    if self.get_manifest_value('update', default=True):
-                        obj, _created = self._update_or_create(lookup_kwargs, to_internal)
-                    else:
-                        obj, _created = self._get_or_create(lookup_kwargs, to_internal)
-                    if _created:
-                        self.report.created += 1
-                    elif self.get_manifest_value('update'):
-                        self.report.updated += 1
-                else:
-                    obj = self._create(self.model, to_internal)
-                    self.report.created += 1
-            except IntegrityError as e:
-                if skip_integrity_errors:
-                    self.report.exceptions['IntegrityError'].append(e)
-                else:
-                    raise e
             if write_to_std_out:
                 self.write_std_out()
+        return objs

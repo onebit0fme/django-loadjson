@@ -13,7 +13,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         data_path = options['json_path']
-        td = TransferData(data_path)
+        td = TransferData(data_name=data_path)
         td.import_data(write_to_std_out=True)
 
         # REPORT

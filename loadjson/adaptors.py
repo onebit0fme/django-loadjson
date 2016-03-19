@@ -37,13 +37,49 @@ class BaseAdaptor(object):
 class ModelHandler(object):
 
     def get(self, model, lookup_kwargs):
+        """
+        Args:
+            model: requested model
+            lookup_kwargs: dict to use during lookup
+
+        Returns: :instance - model instance
+        """
         return model.objects.get(**lookup_kwargs)
 
     def create(self, model, data):
+        """
+
+        Args:
+            model: requested model
+            data: dict - processed data
+
+        Returns: :instance - saved model instance
+
+        """
         return model.objects.create(**data)
 
     def get_or_create(self, model, data, lookup_kwargs):
+        """
+
+        Args:
+            model: requested model
+            data: dict - processed data
+            lookup_kwargs: dict - to use during lookup
+
+        Returns: :tuple (instance, True/False - whether instance was created or not)
+
+        """
         return model.objects.get_or_create(defaults=data, **lookup_kwargs)
 
     def update_or_create(self, model, data, lookup_kwargs):
+        """
+
+        Args:
+            model: requested model
+            data: dict - processed data
+            lookup_kwargs: dict - to use during lookup
+
+        Returns: :tuple (instance, True/False - whether instance was created or not)
+
+        """
         return model.objects.update_or_create(defaults=data, **lookup_kwargs)
