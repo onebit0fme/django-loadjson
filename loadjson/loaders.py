@@ -1,6 +1,7 @@
 import sys
 import importlib
 import dateutil.parser
+import six
 from collections import defaultdict
 from django.conf import settings
 from django.db.utils import IntegrityError
@@ -62,6 +63,12 @@ def get_adaptor_classes():
             raise ImportError("Unable to import {}".format(class_string))
     return adaptor_classes
 
+def get_model_handler_class():
+    loadjson_settings = get_settings()
+    model_handler_setting = loadjson_settings.get('MODEL_HANDLER')
+    if model_handler_setting is None:
+        model_handler_setting = 'loadjson.adaptors.ModelHandler'
+    return import_from_string(model_handler_setting)()
 
 
 class BaseLoader(object):
@@ -128,6 +135,7 @@ class TransferData(BaseLoader):
         # Initialize manifest
         self.app_model = self.get_manifest_value('model')
         self.model = self._get_model(self.get_manifest_value('model'))
+        self.model_handler = get_model_handler_class()
         adaptor_classes = get_adaptor_classes()
         if isinstance(adaptor_classes, list):
             self.adaptors = [adaptor(self.model, self.app_model, self.manifest) for adaptor in adaptor_classes]
@@ -142,7 +150,7 @@ class TransferData(BaseLoader):
                                 count=len(self.data), item=0))()
 
     def write_std_out(self):
-        message = "\r{item}/{count} (Created: {created}, Updated: {updated}".format(
+        message = "\r{item}/{count} (Created: {created}, Updated: {updated})".format(
             count=self.report.count,
             item=self.report.item,
             created=self.report.created,
@@ -239,7 +247,7 @@ class TransferData(BaseLoader):
             #     dt = pytz.utc.localize(dt)
             return dt
         elif field_type == 'relative_key':
-            dependency = self.get_dependency(field_parser.get('file'))
+            dependency = self.get_dependency(field_parser.get('data_name'))
             fk_obj = dependency.get_rk_obj(rk=field_parser.get('rk_lookup', self.get_manifest_value('pk')),
                                            value=value,
                                            many=field_parser.get('many', False),
@@ -255,7 +263,7 @@ class TransferData(BaseLoader):
             mapping_path = internal[field].split('.')
             raw_value = item
             for p in mapping_path:
-                raw_value = raw_value.get(p)
+                raw_value = raw_value.get(p, {})
             if not self._field_is_nullable(field):
                 assert raw_value is not None, "Invalid mapping '{}'".format(internal[field])
             internal_value = self._to_internal_type(field, raw_value)
@@ -269,7 +277,7 @@ class TransferData(BaseLoader):
 
         if lookup_fields is None:
             return None
-        if isinstance(lookup_fields, (str, unicode)):
+        if isinstance(lookup_fields, six.string_types):
             lookup_fields = [lookup_fields]
         lf = {}
         for field in lookup_fields:
@@ -289,7 +297,7 @@ class TransferData(BaseLoader):
 
     def _m2m_fill(self, obj, fields, m2m_clear=True):
         # TODO: make m2m_clear configurable in manifest
-        for field, m2m_array in fields.iteritems():
+        for field, m2m_array in iter(fields.items()):
             if m2m_array is None:
                 continue
             m2m_field = getattr(obj, field)
@@ -301,11 +309,11 @@ class TransferData(BaseLoader):
             m2m_field.add(*m2m_array)
         return obj
 
-    def _update_or_create(self, model, lookup_kwargs, data, m2m_clear=True):
+    def _update_or_create(self, lookup_kwargs, data, m2m_clear=True):
         # TODO: make m2m_clear configurable in manifest
         data = self._apply_adaptors(data)
         data, m2m_data = self._m2m(data)
-        obj, _ = model.objects.update_or_create(defaults=data, **lookup_kwargs)
+        obj, _ = self.model_handler.update_or_create(self.model, data, lookup_kwargs)
         obj = self._m2m_fill(obj, m2m_data, m2m_clear=m2m_clear)
         obj = self._post_save(obj, data, m2m_data)
         return obj, _
@@ -313,21 +321,26 @@ class TransferData(BaseLoader):
     def _create(self, model, data, m2m_clear=False):
         data = self._apply_adaptors(data)
         data, m2m_data = self._m2m(data)
-        obj = model.objects.create(**data)
+        obj = self.model_handler.create(model, data)
         obj = self._m2m_fill(obj, m2m_data)
         obj = self._post_save(obj, data, m2m_data)
         return obj
 
     def _get(self, lookup_kwargs):
-        return self.model.objects.get(**lookup_kwargs)
+        return self.model_handler.get(self.model, lookup_kwargs)
 
-    def _get_or_create(self, model, lookup_kwargs, data):
+    def _get_or_create(self, lookup_kwargs, data, m2m_clear=True):
         data = self._apply_adaptors(data)
-        return model.objects.get_or_create(defaults=data, **lookup_kwargs)
+        data, m2m_data = self._m2m(data)
+        obj, _ = self.model_handler.get_or_create(self.model, data, lookup_kwargs)
+        if _:
+            obj = self._m2m_fill(obj, m2m_data, m2m_clear=m2m_clear)
+            obj = self._post_save(obj, data, m2m_data)
+        return obj, _
 
-    def _get_or_none(self, *args, **kwargs):
+    def _get_or_none(self, lookup_kwargs):
         try:
-            return self._get(*args, **kwargs)
+            return self._get(lookup_kwargs)
         except self.model.DoesNotExist:
             return None
 
@@ -341,16 +354,16 @@ class TransferData(BaseLoader):
             lookup_kwargs = self._lookup_by(to_internal)
             try:
                 if lookup_kwargs is not None:
-                    if self.get_manifest_value('update'):
-                        obj, _created = self._update_or_create(self.model, lookup_kwargs, to_internal)
+                    if self.get_manifest_value('update', default=True):
+                        obj, _created = self._update_or_create(lookup_kwargs, to_internal)
                     else:
-                        obj, _created = self._get_or_create(self.model, lookup_kwargs, to_internal)
+                        obj, _created = self._get_or_create(lookup_kwargs, to_internal)
                     if _created:
                         self.report.created += 1
                     elif self.get_manifest_value('update'):
                         self.report.updated += 1
                 else:
-                    self._create(self.model, to_internal)
+                    obj = self._create(self.model, to_internal)
                     self.report.created += 1
             except IntegrityError as e:
                 if skip_integrity_errors:

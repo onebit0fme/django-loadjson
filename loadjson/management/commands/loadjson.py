@@ -19,16 +19,14 @@ class Command(BaseCommand):
         # REPORT
         if td.report.exceptions:
             self.stdout.write("EXCEPTIONS")
-        for exc_type, exc_list in td.report.exceptions.iteritems():
+        for exc_type, exc_list in iter(td.report.exceptions.items()):
             self.stdout.write(exc_type + "<" * 30)
             if len(exc_list) > 10:
-                print("    - {} ERRORS".format(len(exc_list)))
+                self.stdout.write("    - {} ERRORS".format(len(exc_list)))
             else:
                 for message in exc_list:
-                    print("    - {}".format(message))
-            print "^" * 40
-
+                    self.stdout.write("    - {}".format(message))
+            self.stdout.write("^" * 40)
+        self.stdout.write(" Done!")
         self.stdout.write("CREATED - {}".format(td.report.created))
         self.stdout.write("UPDATED - {}".format(td.report.updated))
-
-        self.stdout.write("Done!")

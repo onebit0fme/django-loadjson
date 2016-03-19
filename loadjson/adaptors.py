@@ -1,5 +1,3 @@
-
-
 class BaseAdaptor(object):
     """
     `models` - a list of models in a format "<app_label>.<model_name>" that the adaptor is applied to.
@@ -30,7 +28,22 @@ class BaseAdaptor(object):
         """
         In some cases (like saving many-to-many relations) data might require
         some additional tweaks. That is done here.
-        Note: Many-to-Many objects are attached by default, however case if many-to-many relationship
+        Note: Many-to-Many objects are attached by default, however in case if many-to-many relationship
         is done through a custom model, this method provides a hook to process such customization.
         """
         pass
+
+
+class ModelHandler(object):
+
+    def get(self, model, lookup_kwargs):
+        return model.objects.get(**lookup_kwargs)
+
+    def create(self, model, data):
+        return model.objects.create(**data)
+
+    def get_or_create(self, model, data, lookup_kwargs):
+        return model.objects.get_or_create(defaults=data, **lookup_kwargs)
+
+    def update_or_create(self, model, data, lookup_kwargs):
+        return model.objects.update_or_create(defaults=data, **lookup_kwargs)
