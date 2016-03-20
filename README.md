@@ -3,7 +3,7 @@ Django management command to load json data of any shape by defining "manifest" 
 
 ## Requirements
 
-Python >= 2.7
+Python 2.7, 3.4, 3.5
 Django >= 1.7
 
 ## Installation
@@ -12,7 +12,7 @@ Django >= 1.7
 
 ## Quick setup
 
-Install loadjson in settings.py
+Include loadjson in settings.py
 
 ```
 INSTALLED_APPS = [

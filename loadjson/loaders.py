@@ -93,7 +93,11 @@ class BaseLoader(object):
         self.data = kwargs.get('data')
         self.manifest = kwargs.get('manifest')
         if self.data is None or self.manifest is None:
-            self.data, self.manifest = find_data(data_name)
+            data, manifest = find_data(data_name)
+            if self.data is None:
+                self.data = data
+            if self.manifest is None:
+                self.manifest = manifest
         if self.data is None:
             raise LoadNotConfigured("Can't find data for {}".format(data_name or ''))
         if self.manifest is None:
@@ -244,7 +248,7 @@ class TransferData(BaseLoader):
             return int(value)
         elif field_type == 'boolean':
             invert = field_parser.get('invert', False)
-            return not value if invert else value
+            return not bool(value) if invert else bool(value)
         elif field_type == 'datetime':
             dt = dateutil.parser.parse(value)
             return dt
