@@ -1,4 +1,6 @@
 # django-loadjson
+[ ![Codeship Status for onebit0fme/django-loadjson](https://codeship.com/projects/6e3309b0-d07e-0133-fd7c-1e2b23aa142a/status?branch=master)](https://codeship.com/projects/141380)
+
 Django management command to load json data of any shape by defining "manifest" that describes mapping instructions.
 
 ## Requirements
