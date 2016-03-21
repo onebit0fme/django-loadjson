@@ -2,7 +2,14 @@
 # -*- coding: utf-8 -*-
 from setuptools import setup, find_packages
 
-LONG_DESCRIPTION = open('README.md').read()
+try:
+    from pypandoc import convert
+    read_md = lambda f: convert(f, 'rst')
+except ImportError:
+    print("warning: pypandoc module not found, could not convert Markdown to RST")
+    read_md = lambda f: open(f, 'r').read()
+
+LONG_DESCRIPTION = read_md('README.md')
 
 setup(
     name="django-loadjson",
@@ -15,8 +22,6 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 2.7",
-        "Programming Language :: Python :: 3.2",
-        "Programming Language :: Python :: 3.3",
         "Programming Language :: Python :: 3.4",
         "Programming Language :: Python :: 3.5",
         "Topic :: Software Development :: Libraries :: Python Modules",

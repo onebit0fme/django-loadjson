@@ -13,6 +13,14 @@ class LoadNotConfigured(Exception):
     pass
 
 
+class RelativeKeyDoesNotExist(Exception):
+    pass
+
+
+class InvalidManifest(Exception):
+    pass
+
+
 class TransferValidationError(Exception):
     pass
 
@@ -184,6 +192,8 @@ class TransferData(BaseLoader):
         1.Scan the file for required `rk` value. 2. Convert to internal value.
         """
         # cache rk lookup
+        if rk is None:
+            raise InvalidManifest("Can't lookup. 'rk_lookup' field is required")
         if self.__indices.get(rk) is None:
             indexed_by_rk = defaultdict(list)
             for item in self.data:
@@ -258,6 +268,8 @@ class TransferData(BaseLoader):
                                            value=value,
                                            many=field_parser.get('many', False),
                                            lookup=field_parser.get('lookup'))
+            if fk_obj is None and not self._field_is_nullable(field):
+                raise RelativeKeyDoesNotExist("Can't find related object by key: {}".format(value))
             return fk_obj
         elif field_type == 'relative_object':
             data_name = field_parser.get('data_name')

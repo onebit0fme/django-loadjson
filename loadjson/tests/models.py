@@ -20,3 +20,4 @@ class MyModel(models.Model):
     datetime_field = models.DateTimeField(default=timezone.now)
     date_field = models.DateField(default=timezone.now)
     related_obj = models.ForeignKey(MyRelatedModel, null=True)
+    many_related_objs = models.ManyToManyField(MyRelatedModel)
