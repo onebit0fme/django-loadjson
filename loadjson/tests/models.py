@@ -19,5 +19,5 @@ class MyModel(models.Model):
     int_field = models.IntegerField(default=0)
     datetime_field = models.DateTimeField(default=timezone.now)
     date_field = models.DateField(default=timezone.now)
-    related_obj = models.ForeignKey(MyRelatedModel, null=True)
+    related_obj = models.ForeignKey(MyRelatedModel, null=True, related_name='+')
     many_related_objs = models.ManyToManyField(MyRelatedModel)
