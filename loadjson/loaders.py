@@ -348,16 +348,16 @@ class TransferData(BaseLoader):
         data = self._apply_adaptors(data)
         data, m2m_data = self._m2m(data)
         obj, _ = self.model_handler.update_or_create(self.model, data, lookup_kwargs)
-        obj = self._m2m_fill(obj, m2m_data, m2m_clear=m2m_clear)
         obj = self._post_save(obj, data, m2m_data)
+        obj = self._m2m_fill(obj, m2m_data, m2m_clear=m2m_clear)
         return obj, _
 
     def _create(self, model, data, m2m_clear=False):
         data = self._apply_adaptors(data)
         data, m2m_data = self._m2m(data)
         obj = self.model_handler.create(model, data)
-        obj = self._m2m_fill(obj, m2m_data)
         obj = self._post_save(obj, data, m2m_data)
+        obj = self._m2m_fill(obj, m2m_data)
         return obj
 
     def _get(self, lookup_kwargs):
@@ -368,8 +368,8 @@ class TransferData(BaseLoader):
         data, m2m_data = self._m2m(data)
         obj, _ = self.model_handler.get_or_create(self.model, data, lookup_kwargs)
         if _:
-            obj = self._m2m_fill(obj, m2m_data, m2m_clear=m2m_clear)
             obj = self._post_save(obj, data, m2m_data)
+            obj = self._m2m_fill(obj, m2m_data, m2m_clear=m2m_clear)
         return obj, _
 
     def _get_or_none(self, lookup_kwargs):

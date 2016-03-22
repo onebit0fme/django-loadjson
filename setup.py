@@ -13,7 +13,7 @@ LONG_DESCRIPTION = read_md('README.md')
 
 setup(
     name="django-loadjson",
-    version='0.1.0',
+    version='0.1.1',
     description="Loadjson management command for Django",
     long_description=LONG_DESCRIPTION,
     classifiers=[
@@ -40,7 +40,6 @@ setup(
     include_package_data=True,
     test_suite='testrunner',
     install_requires=[
-        'django>=1.7',
         'python-dateutil',
         'six',
     ],
