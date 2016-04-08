@@ -1,5 +1,6 @@
 import os
 import json
+from io import open
 
 
 class LoaderNotConfigured(Exception):
@@ -29,5 +30,5 @@ class DefaultDataFinder(object):
         for d_dir in self.data_dirs:
             file_path = os.path.join(d_dir, file_name)
             if os.path.isfile(file_path):
-                with open(file_path) as data:
+                with open(file_path, encoding='utf-8') as data:
                     return json.load(data)
