@@ -13,11 +13,11 @@ LONG_DESCRIPTION = read_md('README.md')
 
 setup(
     name="django-loadjson",
-    version='0.1.1',
+    version='0.1.2',
     description="Loadjson management command for Django",
     long_description=LONG_DESCRIPTION,
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "Environment :: Console",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
